@@ -4,6 +4,25 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
+/// <summary>
+/// Procedural dungeon map generator based on BSP (Binary Space Partitioning).
+///
+/// Generates a complete playable map including:
+/// - Room layout (recursive space partitioning)
+/// - Corridor connections between rooms
+/// - Tile-based geometry (floor, wall, corner, pillar)
+/// - Object placement (monsters, items, props)
+///
+/// Supports both single-player and multiplayer synchronization,
+/// ensuring consistent map generation across clients.
+///
+/// The generation pipeline:
+/// 1. Divide space into regions (BSP)
+/// 2. Create rooms inside regions
+/// 3. Connect rooms with paths
+/// 4. Assign room types and spawn objects
+/// 5. Build tile mesh and instantiate objects
+/// </summary>
 public class MapGenerator : MonoBehaviour
 {
 #if USE_DEBUG_ROOM_TYPE
@@ -12,14 +31,14 @@ public class MapGenerator : MonoBehaviour
 #endif
 
     [Header("MAP SETTING")]
-    public Camera mainCam;                          //카메라
-    public Transform mapPos;                        //맵 위치
-    public Texture2D mapTexture;                    //맵 텍스쳐
-    public Vector2Int mapSize;                      //맵 크기
-    public float tileSize = 4f;                     //타일 크기
-    public int maxDivideDepth = 4;                  //맵 생성 깊이
-    public float minDividePer = 0.4f;               //최소 맵 자르기 비율
-    public float maxDividePer = 0.6f;               //최대 맵 자르기 비율
+    public Camera mainCam;
+    public Transform mapPos;
+    public Texture2D mapTexture;
+    public Vector2Int mapSize;
+    public float tileSize = 4f;
+    public int maxDivideDepth = 4;
+    public float minDividePer = 0.4f;
+    public float maxDividePer = 0.6f;
 
     [Header("MAP OBJECT SETTING")]
     public int normalMonsterCount = 5;
@@ -44,9 +63,9 @@ public class MapGenerator : MonoBehaviour
     public string traderResName;
     public string potalResName;
 
-    public enum RoomType { START, BATTLE, ELITE, TREASURE, POTAL, BOSS }            //방 타입
-    public enum TileType { EMPTY, FLOOR, WALL, CORNER, PILLAR, PATH }                       //타일 타입
-    public enum TileID { FLOOR = 100, WALL, CORNER, PILLAR }                                //타일 ID
+    public enum RoomType { START, BATTLE, ELITE, TREASURE, POTAL, BOSS }
+    public enum TileType { EMPTY, FLOOR, WALL, CORNER, PILLAR, PATH }
+    public enum TileID { FLOOR = 100, WALL, CORNER, PILLAR }
     public enum MapObjectID { CHEST=300, TRADER, POTAL }
 
     public const int MapDecoID = 400;
@@ -56,10 +75,16 @@ public class MapGenerator : MonoBehaviour
     [SerializeField] private Color myPlayerColor = Color.red;
     [SerializeField] private Color othPlayerColor = Color.blue;
 
-    [HideInInspector] public Transform tilePos;     //타일 위치
-    [HideInInspector] public Transform objectPos;   //오브젝트 위치
-    [HideInInspector] public Transform poolPos;     //메모리풀 위치
+    [HideInInspector] public Transform tilePos;
+    [HideInInspector] public Transform objectPos;
+    [HideInInspector] public Transform poolPos;
 
+    /// <summary>
+    /// Node used for BSP space partitioning.
+    /// Each node represents a rectangular region of the map,
+    /// which can be recursively divided into smaller regions.
+    /// Leaf nodes contain actual room data.
+    /// </summary>
     class RoomNode
     {
         public RectInt rect;
@@ -71,6 +96,11 @@ public class MapGenerator : MonoBehaviour
         public RoomNode(RectInt rect) => this.rect = rect;
         public Vector2Int Center { get { return new Vector2Int(room.x + (room.width - 1) / 2, room.y + (room.height - 1) / 2); } }
     }
+
+    /// <summary>
+    /// Represents a splitting line used during BSP division.
+    /// Defines whether the split is horizontal or vertical.
+    /// </summary>
     public struct AxisLine
     {
         public int xy;
@@ -82,6 +112,10 @@ public class MapGenerator : MonoBehaviour
             this.xAxis = xAxis;
         }
     }
+    /// <summary>
+    /// Represents a connection (corridor) between two rooms.
+    /// Stores endpoints and the axis used for path construction.
+    /// </summary>
     public struct PathInfo
     {
         public Vector2Int begin;
@@ -95,6 +129,10 @@ public class MapGenerator : MonoBehaviour
             this.line = line;
         }
     }
+    /// <summary>
+    /// Contains final room data including type and bounds.
+    /// Used for gameplay logic such as spawning and events.
+    /// </summary>
     public struct RoomInfo
     {
         public RoomType type;
@@ -107,6 +145,10 @@ public class MapGenerator : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Serializable data describing an object to be spawned in the map.
+    /// Includes object ID, target room, and world position.
+    /// </summary>
     [System.Serializable]
     public class ObjInfo
     {
@@ -128,16 +170,16 @@ public class MapGenerator : MonoBehaviour
         public ObjInfoList(List<ObjInfo> objs) => this.objs = objs;
     }
 
-    List<RectInt> rooms;                //방 리스트
-    List<PathInfo> paths;               //통로 리스트
-    List<RoomInfo> roomInfos;           //방 정보 리스트
-    List<ObjInfo> objects;              //오브젝트 리스트
+    List<RectInt> rooms;
+    List<PathInfo> paths;
+    List<RoomInfo> roomInfos;
+    List<ObjInfo> objects;
 
     PhotonView pv;
     PhotonReady pr;
 
-    TileType[] mapTiles;                //맵 타일
-    Texture2D tileTexture;              //타일 텍스쳐
+    TileType[] mapTiles;
+    Texture2D tileTexture;
 
     [HideInInspector] public int level = 1;
     int mapMatIdx = -1;
@@ -145,6 +187,10 @@ public class MapGenerator : MonoBehaviour
     Vector3 playerSpawnPoint;
     Dictionary<int, ObjectPool> objectsPool;
 
+    /// <summary>
+    /// Initializes map data structures and object pools.
+    /// Prepares containers for tiles, rooms, paths, and objects.
+    /// </summary>
     private void Awake()
     {
         pv = GetComponent<PhotonView>();
@@ -164,6 +210,11 @@ public class MapGenerator : MonoBehaviour
 
         objectsPool = new Dictionary<int, ObjectPool>();
     }
+    /// <summary>
+    /// Initializes object pools and starts map generation.
+    /// Handles loading flow and prepares all required resources
+    /// before generating the level.
+    /// </summary>
     IEnumerator Start()
     {
         yield return new WaitForSeconds(1);
@@ -237,6 +288,12 @@ public class MapGenerator : MonoBehaviour
         level++;
         StartCoroutine(LoadLevel());
     }
+
+    /// <summary>
+    /// Main generation entry point.
+    /// Handles loading UI, selects generation mode (single/multi),
+    /// and executes the full map generation pipeline.
+    /// </summary>
     IEnumerator LoadLevel()
     {
         yield return GameManager.Instance.StartLoading();
@@ -247,16 +304,15 @@ public class MapGenerator : MonoBehaviour
 
         if (PhotonNetwork.inRoom)
         {
-            //멀티용 맵 생성
+            //multi
             yield return StartCoroutine(GenerateRandomMapMulti());
         }
         else
         {
-            //싱글용 맵 생성
+            //single
             yield return StartCoroutine(GenerateRandomMapLocal());
         }
 
-        //로딩화면 제거
         yield return GameManager.Instance.EndLoading();
     }
 
@@ -338,6 +394,11 @@ public class MapGenerator : MonoBehaviour
         DecideRoomType();
         SetObjectData();
     }
+    /// <summary>
+    /// Recursively divides a region using BSP.
+    /// Alternates between horizontal and vertical splits
+    /// while maintaining variation and minimum size constraints.
+    /// </summary>
     void DivideRect(RoomNode node, int pDivAxis = -1, int divDepth = 0, bool hRev = false, bool vRev = false, int n = 0)
     {
         if (n == maxDivideDepth) return;
@@ -407,6 +468,10 @@ public class MapGenerator : MonoBehaviour
         DivideRect(node.left, divideAxis, divDepth, bH, bV, n + 1);
         DivideRect(node.right, divideAxis, divDepth, hRev, vRev, n + 1);
     }
+    /// <summary>
+    /// Generates actual room rectangles inside leaf nodes.
+    /// Rooms are slightly inset from partition bounds to create walls.
+    /// </summary>
     RectInt CreateRoom(RoomNode node, int n = 0)
     {
         RectInt room;
@@ -432,6 +497,10 @@ public class MapGenerator : MonoBehaviour
 
         return room;
     }
+    /// <summary>
+    /// Connects rooms by generating corridor paths between partitions.
+    /// Ensures all rooms are reachable.
+    /// </summary>
     void CreatePath(RoomNode node, int n = 0)
     {
         if (n == maxDivideDepth) return;
@@ -451,6 +520,10 @@ public class MapGenerator : MonoBehaviour
     }
 
     /*------------OBJ DATA------------*/
+    /// <summary>
+    /// Assigns gameplay roles to each room (start, battle, treasure, etc.).
+    /// Distribution is randomized with constraints based on level.
+    /// </summary>
     void DecideRoomType()
     {
         int roomCount = (int)Mathf.Pow(2, maxDivideDepth);
@@ -481,6 +554,10 @@ public class MapGenerator : MonoBehaviour
             roomInfos.Add(new RoomInfo(type, rooms[i]));
         }
     }
+    /// <summary>
+    /// Generates object spawn data for each room.
+    /// Includes enemies, items, decorations, and player spawn points.
+    /// </summary>
     void SetObjectData()
     {
         int playerCount = PhotonNetwork.inRoom ? PhotonNetwork.room.PlayerCount : 1;
@@ -576,6 +653,10 @@ public class MapGenerator : MonoBehaviour
     }
 
     /*------------MAP PAINT------------*/
+    /// <summary>
+    /// Converts abstract map data (rooms + paths) into tile types.
+    /// Defines floor, walls, corners, pillars, and corridors.
+    /// </summary>
     void PaintMapTile()
     {
         int map_w = mapSize.x;
@@ -711,6 +792,10 @@ public class MapGenerator : MonoBehaviour
     }
 
     /*------------MAP TILE------------*/
+    /// <summary>
+    /// Instantiates tile GameObjects based on tile map data.
+    /// Applies correct prefab, position, rotation, and material.
+    /// </summary>
     [PunRPC] void GenerateMapTile(TileType[] tiles)
     {
         float multiplierFactor = tileSize + float.Epsilon;
@@ -816,6 +901,10 @@ public class MapGenerator : MonoBehaviour
     }
 
     /*------------MAP OBJECT------------*/
+    /// <summary>
+    /// Spawns all gameplay objects based on serialized object data.
+    /// Handles multiplayer synchronization and ownership logic.
+    /// </summary>
     [PunRPC] void GenerateMapObject(string json)
     {
         List<ObjInfo> objs = JsonUtility.FromJson<ObjInfoList>(json).objs;
